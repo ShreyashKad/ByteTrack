@@ -7,12 +7,16 @@ import torch
 
 from loguru import logger
 
-from yolox.data.data_augment import preproc
+# from yolox.data.data_augment import preproc
 from yolox.exp import get_exp
 from yolox.utils import fuse_model, get_model_info, postprocess
 from yolox.utils.visualize import plot_tracking
 from yolox.tracker.byte_tracker import BYTETracker
 from yolox.tracking_utils.timer import Timer
+
+import sys
+sys.path.append('../../detectors/yolov5/')
+import detect_y5 as detect
 
 
 IMAGE_EXT = [".jpg", ".jpeg", ".webp", ".bmp", ".png"]
@@ -29,6 +33,10 @@ def make_parser():
     parser.add_argument(
         #"--path", default="./datasets/mot/train/MOT17-05-FRCNN/img1", help="path to images or video"
         "--path", default="./videos/palace.mp4", help="path to images or video"
+    )
+    parser.add_argument(
+        #"--path", default="./datasets/mot/train/MOT17-05-FRCNN/img1", help="path to images or video"
+        "--outdir", default="./track/", help="path of output dir"
     )
     parser.add_argument("--camid", type=int, default=0, help="webcam demo camera id")
     parser.add_argument(
@@ -87,6 +95,7 @@ def make_parser():
     )
     parser.add_argument('--min_box_area', type=float, default=10, help='filter out tiny boxes')
     parser.add_argument("--mot20", dest="mot20", default=False, action="store_true", help="test mot20.")
+    
     return parser
 
 
@@ -152,6 +161,7 @@ class Predictor(object):
         else:
             img_info["file_name"] = None
 
+        print(img.shape, '--img')
         height, width = img.shape[:2]
         img_info["height"] = height
         img_info["width"] = width
@@ -165,13 +175,27 @@ class Predictor(object):
 
         with torch.no_grad():
             timer.tic()
-            outputs = self.model(img)
-            if self.decoder is not None:
-                outputs = self.decoder(outputs, dtype=outputs.type())
-            outputs = postprocess(
-                outputs, self.num_classes, self.confthre, self.nmsthre
+            # outputs = self.model(img)
+            outputs = detect.run(
+                weights = '../../detectors/yolov5/weights/exp24weights.pt',
+                imgsz = (1280, 1280),
+                device = self.device,
+                nosave = True,
+                classes = 0,
+                visualize = False,
+                conf_thres=0.05,  # confidence threshold
+                iou_thres=0.45,  # NMS IOU threshold
+                half=False,  # use FP16 half-precision inference
+                im0s=img, # Img input from tracker
             )
+            # if self.decoder is not None:
+            #     outputs = self.decoder(outputs, dtype=outputs.type())
+            # outputs = postprocess(
+            #     outputs, self.num_classes, self.confthre, self.nmsthre
+            # )
+            
             #logger.info("Infer time: {:.4f}s".format(time.time() - t0))
+        print(outputs.shape, '--op')
         return outputs, img_info
 
 
@@ -302,7 +326,7 @@ def main(exp, args):
     if not args.experiment_name:
         args.experiment_name = exp.exp_name
 
-    output_dir = osp.join(exp.output_dir, args.experiment_name)
+    output_dir = osp.join(args.outdir, args.experiment_name)
     os.makedirs(output_dir, exist_ok=True)
 
     if args.save_result:
