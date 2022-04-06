@@ -17,7 +17,7 @@ from yolox.tracker.byte_tracker import BYTETracker
 from yolox.tracking_utils.timer import Timer
 
 import sys
-sys.path.append('../../detectors/yolov5/')
+sys.path.append('../../trained_detector/yolov5/')
 print(sys.path)
 from pathlib import Path
 
@@ -145,7 +145,7 @@ class Detecter:
         self,
         weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
         # source=ROOT / 'data/images',  # file/dir/URL/glob, 0 for webcam
-        data=ROOT / '../../detectors/yolov5/data/coco128.yaml',  # dataset.yaml path
+        data=ROOT / '../../trained_detector/yolov5/data/coco128.yaml',  # dataset.yaml path
         imgsz=(640, 640),  # inference size (height, width)
         conf_thres=0.25,  # confidence threshold
         iou_thres=0.45,  # NMS IOU threshold
@@ -254,7 +254,7 @@ class Predictor(object):
         self.rgb_means = (0.485, 0.456, 0.406)
         self.std = (0.229, 0.224, 0.225)
         self.model = Detecter(
-            weights = '../../detectors/yolov5/weights/exp24weights.pt',
+            weights = '../../trained_detector/yolov5/weights/exp24weights.pt',
             imgsz = (1280, 1280),
             device = self.device,
             classes = 0,
