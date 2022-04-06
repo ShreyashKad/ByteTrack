@@ -164,6 +164,7 @@ class BYTETracker(object):
         removed_stracks = []
 
         if output_results.shape[1] == 5:
+            output_results = output_results.cpu().numpy()
             scores = output_results[:, 4]
             bboxes = output_results[:, :4]
         else:

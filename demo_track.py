@@ -1,3 +1,4 @@
+# python demo_track.py video -expn 'test' -n 'track1' --path /home/BONDEN5-mathan-2022-03-14/videos/BONDEN5_20210616_124719.avi --outdir 'track_out' --save_result
 import argparse
 import os
 import os.path as osp
@@ -7,7 +8,7 @@ import torch
 
 from loguru import logger
 
-# from yolox.data.data_augment import preproc
+from yolox.data.data_augment import preproc
 from yolox.exp import get_exp
 from yolox.utils import fuse_model, get_model_info, postprocess
 from yolox.utils.visualize import plot_tracking
@@ -16,7 +17,9 @@ from yolox.tracking_utils.timer import Timer
 
 import sys
 sys.path.append('../../detectors/yolov5/')
+print(sys.path)
 import detect_y5 as detect
+from utils.torch_utils import select_device, time_sync
 
 
 IMAGE_EXT = [".jpg", ".jpeg", ".webp", ".bmp", ".png"]
@@ -133,27 +136,33 @@ class Predictor(object):
         device=torch.device("cpu"),
         fp16=False
     ):
-        self.model = model
-        self.decoder = decoder
-        self.num_classes = exp.num_classes
-        self.confthre = exp.test_conf
-        self.nmsthre = exp.nmsthre
-        self.test_size = exp.test_size
-        self.device = device
+        # self.model = model
+        # self.decoder = decoder
+        self.num_classes = 3
+        # self.confthre = exp.test_conf
+        # self.nmsthre = exp.nmsthre
+        # self.test_size = exp.test_size
+        self.test_size = (1280, 1280)
+        # self.device = device
+        self.device = str(torch.cuda.current_device())
+        print(self.device, '--device')
         self.fp16 = fp16
-        if trt_file is not None:
-            from torch2trt import TRTModule
+        # if trt_file is not None:
+        #     from torch2trt import TRTModule
 
-            model_trt = TRTModule()
-            model_trt.load_state_dict(torch.load(trt_file))
+        #     model_trt = TRTModule()
+        #     model_trt.load_state_dict(torch.load(trt_file))
 
-            x = torch.ones((1, 3, exp.test_size[0], exp.test_size[1]), device=device)
-            self.model(x)
-            self.model = model_trt
+        #     x = torch.ones((1, 3, exp.test_size[0], exp.test_size[1]), device=device)
+        #     self.model(x)
+        #     self.model = model_trt
         self.rgb_means = (0.485, 0.456, 0.406)
         self.std = (0.229, 0.224, 0.225)
 
+        
+
     def inference(self, img, timer):
+        # device = select_device(self.device)
         img_info = {"id": 0}
         if isinstance(img, str):
             img_info["file_name"] = osp.basename(img)
@@ -167,16 +176,16 @@ class Predictor(object):
         img_info["width"] = width
         img_info["raw_img"] = img
 
-        img, ratio = preproc(img, self.test_size, self.rgb_means, self.std)
-        img_info["ratio"] = ratio
-        img = torch.from_numpy(img).unsqueeze(0).float().to(self.device)
+        # img, ratio = preproc(img, self.test_size, self.rgb_means, self.std)
+        # img_info["ratio"] = ratio
+        # img = torch.from_numpy(img).unsqueeze(0).float().to(device)
         if self.fp16:
             img = img.half()  # to FP16
 
         with torch.no_grad():
             timer.tic()
             # outputs = self.model(img)
-            outputs = detect.run(
+            outputs, self.device = detect.run(
                 weights = '../../detectors/yolov5/weights/exp24weights.pt',
                 imgsz = (1280, 1280),
                 device = self.device,
@@ -212,7 +221,7 @@ def image_demo(predictor, vis_folder, current_time, args):
     for frame_id, img_path in enumerate(files, 1):
         outputs, img_info = predictor.inference(img_path, timer)
         if outputs[0] is not None:
-            online_targets = tracker.update(outputs[0], [img_info['height'], img_info['width']], exp.test_size)
+            online_targets = tracker.update(outputs[0], [img_info['height'], img_info['width']], self.test_size)
             online_tlwhs = []
             online_ids = []
             online_scores = []
@@ -277,14 +286,15 @@ def imageflow_demo(predictor, vis_folder, current_time, args):
     timer = Timer()
     frame_id = 0
     results = []
+    test_size = (1280, 1280)
     while True:
         if frame_id % 20 == 0:
             logger.info('Processing frame {} ({:.2f} fps)'.format(frame_id, 1. / max(1e-5, timer.average_time)))
         ret_val, frame = cap.read()
         if ret_val:
             outputs, img_info = predictor.inference(frame, timer)
-            if outputs[0] is not None:
-                online_targets = tracker.update(outputs[0], [img_info['height'], img_info['width']], exp.test_size)
+            if outputs is not None:
+                online_targets = tracker.update(outputs[:,:5], [img_info['height'], img_info['width']], test_size)
                 online_tlwhs = []
                 online_ids = []
                 online_scores = []
@@ -324,7 +334,8 @@ def imageflow_demo(predictor, vis_folder, current_time, args):
 
 def main(exp, args):
     if not args.experiment_name:
-        args.experiment_name = exp.exp_name
+        # args.experiment_name = exp.exp_name
+        args.experiment_name = 'track'
 
     output_dir = osp.join(args.outdir, args.experiment_name)
     os.makedirs(output_dir, exist_ok=True)
@@ -339,48 +350,51 @@ def main(exp, args):
 
     logger.info("Args: {}".format(args))
 
-    if args.conf is not None:
-        exp.test_conf = args.conf
-    if args.nms is not None:
-        exp.nmsthre = args.nms
-    if args.tsize is not None:
-        exp.test_size = (args.tsize, args.tsize)
+    # if args.conf is not None:
+    #     exp.test_conf = args.conf
+    # if args.nms is not None:
+    #     exp.nmsthre = args.nms
+    # if args.tsize is not None:
+    #     exp.test_size = (args.tsize, args.tsize)
 
-    model = exp.get_model().to(args.device)
-    logger.info("Model Summary: {}".format(get_model_info(model, exp.test_size)))
-    model.eval()
+    # model = exp.get_model().to(args.device)
+    # logger.info("Model Summary: {}".format(get_model_info(model, exp.test_size)))
+    # model.eval()
 
-    if not args.trt:
-        if args.ckpt is None:
-            ckpt_file = osp.join(output_dir, "best_ckpt.pth.tar")
-        else:
-            ckpt_file = args.ckpt
-        logger.info("loading checkpoint")
-        ckpt = torch.load(ckpt_file, map_location="cpu")
-        # load the model state dict
-        model.load_state_dict(ckpt["model"])
-        logger.info("loaded checkpoint done.")
+    # if not args.trt:
+    #     if args.ckpt is None:
+    #         ckpt_file = osp.join(output_dir, "best_ckpt.pth.tar")
+    #     else:
+    #         ckpt_file = args.ckpt
+    #     logger.info("loading checkpoint")
+    #     ckpt = torch.load(ckpt_file, map_location="cpu")
+    #     # load the model state dict
+    #     model.load_state_dict(ckpt["model"])
+    #     logger.info("loaded checkpoint done.")
 
-    if args.fuse:
-        logger.info("\tFusing model...")
-        model = fuse_model(model)
+    # if args.fuse:
+    #     logger.info("\tFusing model...")
+    #     model = fuse_model(model)
 
-    if args.fp16:
-        model = model.half()  # to FP16
+    # if args.fp16:
+    #     model = model.half()  # to FP16
 
-    if args.trt:
-        assert not args.fuse, "TensorRT model is not support model fusing!"
-        trt_file = osp.join(output_dir, "model_trt.pth")
-        assert osp.exists(
-            trt_file
-        ), "TensorRT model is not found!\n Run python3 tools/trt.py first!"
-        model.head.decode_in_inference = False
-        decoder = model.head.decode_outputs
-        logger.info("Using TensorRT to inference")
-    else:
-        trt_file = None
-        decoder = None
+    # if args.trt:
+    #     assert not args.fuse, "TensorRT model is not support model fusing!"
+    #     trt_file = osp.join(output_dir, "model_trt.pth")
+    #     assert osp.exists(
+    #         trt_file
+    #     ), "TensorRT model is not found!\n Run python3 tools/trt.py first!"
+    #     model.head.decode_in_inference = False
+    #     decoder = model.head.decode_outputs
+    #     logger.info("Using TensorRT to inference")
+    # else:
+    #     trt_file = None
+    #     decoder = None
 
+    model = None
+    trt_file = None
+    decoder = None
     predictor = Predictor(model, exp, trt_file, decoder, args.device, args.fp16)
     current_time = time.localtime()
     if args.demo == "image":
@@ -391,6 +405,6 @@ def main(exp, args):
 
 if __name__ == "__main__":
     args = make_parser().parse_args()
-    exp = get_exp(args.exp_file, args.name)
-
+    # exp = get_exp(args.exp_file, args.name)
+    exp = None
     main(exp, args)
