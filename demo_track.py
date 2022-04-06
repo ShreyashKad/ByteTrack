@@ -5,6 +5,7 @@ import os.path as osp
 import time
 import cv2
 import torch
+import numpy as np
 
 from loguru import logger
 
@@ -18,8 +19,21 @@ from yolox.tracking_utils.timer import Timer
 import sys
 sys.path.append('../../detectors/yolov5/')
 print(sys.path)
-import detect_y5 as detect
+from pathlib import Path
+
+FILE = Path(__file__).resolve()
+ROOT = FILE.parents[0]  # YOLOv5 root directory
+if str(ROOT) not in sys.path:
+    sys.path.append(str(ROOT))  # add ROOT to PATH
+ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
+
+from models.common import DetectMultiBackend
+from utils.general import (check_img_size, non_max_suppression, scale_coords)
+
+# import detect_y5 as detect
 from utils.torch_utils import select_device, time_sync
+from utils.augmentations import letterbox
+
 
 
 IMAGE_EXT = [".jpg", ".jpeg", ".webp", ".bmp", ".png"]
@@ -126,6 +140,88 @@ def write_results(filename, results):
     logger.info('save results to {}'.format(filename))
 
 
+class Detecter:
+    def __init__(
+        self,
+        weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
+        # source=ROOT / 'data/images',  # file/dir/URL/glob, 0 for webcam
+        data=ROOT / '../../detectors/yolov5/data/coco128.yaml',  # dataset.yaml path
+        imgsz=(640, 640),  # inference size (height, width)
+        conf_thres=0.25,  # confidence threshold
+        iou_thres=0.45,  # NMS IOU threshold
+        max_det=1000,  # maximum detections per image
+        device='',  # cuda device, i.e. 0 or 0,1,2,3 or cpu
+        classes=None,  # filter by class: --class 0, or --class 0 2 3
+        agnostic_nms=False,  # class-agnostic NMS
+        augment=False,  # augmented inference
+        visualize=False,  # visualize features
+        half=False,  # use FP16 half-precision inference
+        dnn=False,  # use OpenCV DNN for ONNX inference
+    ):
+        self.device = select_device(device)
+        self.model = DetectMultiBackend(weights, device=self.device, dnn=dnn, data=data, fp16=half)
+        self.stride, self.names, self.pt = self.model.stride, self.model.names, self.model.pt
+        self.imgsz = check_img_size(imgsz, s=self.stride)  # check image size
+        self.conf_thres, self.iou_thres, self.max_det = conf_thres, iou_thres, max_det
+        self.agnostic_nms = agnostic_nms
+        self.classes = classes
+
+        self.augment = augment
+        self.visualize = visualize
+        self.model.warmup(imgsz=(1 if self.pt else bs, 3, *imgsz))
+    
+    def detect(
+        self,
+        im0s
+    ):
+        dt, seen = [0.0, 0.0, 0.0], 0
+        im = letterbox(im0s, self.imgsz, stride=self.stride, auto=self.pt)[0]
+        # Convert
+        im = im.transpose((2, 0, 1))[::-1]  # HWC to CHW, BGR to RGB
+        im = np.ascontiguousarray(im)
+
+        t1 = time_sync()
+        im = torch.from_numpy(im).to(self.device)
+        im = im.half() if self.model.fp16 else im.float()  # uint8 to fp16/32
+        im /= 255  # 0 - 255 to 0.0 - 1.0
+        if len(im.shape) == 3:
+            im = im[None]  # expand for batch dim
+        t2 = time_sync()
+        dt[0] += t2 - t1
+
+        # Inference
+        pred = self.model(im, augment=self.augment, visualize=self.visualize)
+        t3 = time_sync()
+        dt[1] += t3 - t2
+
+        # NMS
+        pred = non_max_suppression(pred, self.conf_thres, self.iou_thres, self.classes, self.agnostic_nms, max_det=self.max_det)
+        dt[2] += time_sync() - t3
+
+        s = ''
+        # Process predictions
+        for i, det in enumerate(pred):  # per image
+            seen += 1
+            im0 = im0s.copy()
+            s += '%gx%g ' % im.shape[2:]  # print string
+            gn = torch.tensor(im0.shape)[[1, 0, 1, 0]]  # normalization gain whwh
+            # imc = im0.copy() if save_crop else im0  # for save_crop
+            imc = im0
+            if len(det):
+                # Rescale boxes from img_size to im0 size
+                det[:, :4] = scale_coords(im.shape[2:], det[:, :4], im0.shape).round()
+
+                # Print results
+                for c in det[:, -1].unique():
+                    n = (det[:, -1] == c).sum()  # detections per class
+                    s += f"{n} {self.names[int(c)]}{'s' * (n > 1)}, "  # add to string
+
+                # Write results
+                # print(det, det.shape)
+            return det, self.device
+    
+
+
 class Predictor(object):
     def __init__(
         self,
@@ -145,7 +241,6 @@ class Predictor(object):
         self.test_size = (1280, 1280)
         # self.device = device
         self.device = str(torch.cuda.current_device())
-        print(self.device, '--device')
         self.fp16 = fp16
         # if trt_file is not None:
         #     from torch2trt import TRTModule
@@ -158,6 +253,16 @@ class Predictor(object):
         #     self.model = model_trt
         self.rgb_means = (0.485, 0.456, 0.406)
         self.std = (0.229, 0.224, 0.225)
+        self.model = Detecter(
+            weights = '../../detectors/yolov5/weights/exp24weights.pt',
+            imgsz = (1280, 1280),
+            device = self.device,
+            classes = 0,
+            visualize = False,
+            conf_thres=0.05,  # confidence threshold
+            iou_thres=0.45,  # NMS IOU threshold
+            half=self.fp16,  # use FP16 half-precision inference
+        )
 
         
 
@@ -185,18 +290,7 @@ class Predictor(object):
         with torch.no_grad():
             timer.tic()
             # outputs = self.model(img)
-            outputs, self.device = detect.run(
-                weights = '../../detectors/yolov5/weights/exp24weights.pt',
-                imgsz = (1280, 1280),
-                device = self.device,
-                nosave = True,
-                classes = 0,
-                visualize = False,
-                conf_thres=0.05,  # confidence threshold
-                iou_thres=0.45,  # NMS IOU threshold
-                half=False,  # use FP16 half-precision inference
-                im0s=img, # Img input from tracker
-            )
+            outputs, self.device = self.model.detect(im0s=img) # Img input from tracker
             # if self.decoder is not None:
             #     outputs = self.decoder(outputs, dtype=outputs.type())
             # outputs = postprocess(
@@ -293,6 +387,12 @@ def imageflow_demo(predictor, vis_folder, current_time, args):
         ret_val, frame = cap.read()
         if ret_val:
             outputs, img_info = predictor.inference(frame, timer)
+            imag = frame.copy()
+            for o in outputs:
+                x1, y1, x2, y2 = int(o[0]), int(o[1]), int(o[2]), int(o[3])
+                imag = cv2.rectangle(imag, (x1, y1), (x2, y2), (255, 0, 0), 3)
+            cv2.imwrite(save_path+'img1.png', imag)
+            input('check image')
             if outputs is not None:
                 online_targets = tracker.update(outputs[:,:5], [img_info['height'], img_info['width']], test_size)
                 online_tlwhs = []
