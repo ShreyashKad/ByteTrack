@@ -17,7 +17,7 @@ from yolox.tracker.byte_tracker import BYTETracker
 from yolox.tracking_utils.timer import Timer
 
 import sys
-sys.path.append('../../trained_detector/yolov5/')
+sys.path.append('../../trained_detector/ScaledYOLOv4/')
 from pathlib import Path
 
 FILE = Path(__file__).resolve()
@@ -26,12 +26,12 @@ if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))  # add ROOT to PATH
 ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 
-from models.common import DetectMultiBackend
+from models.experimental import attempt_load
 from utils.general import (check_img_size, non_max_suppression, scale_coords)
-
+from numpy import random
 # import detect_y5 as detect
-from utils.torch_utils import select_device, time_sync
-from utils.augmentations import letterbox
+from utils.torch_utils import select_device
+from utils.datasets import letterbox
 
 
 
@@ -158,44 +158,48 @@ class Detecter:
         dnn=False,  # use OpenCV DNN for ONNX inference
     ):
         self.device = select_device(device)
-        self.model = DetectMultiBackend(weights, device=self.device, dnn=dnn, data=data, fp16=half)
-        self.stride, self.names, self.pt = self.model.stride, self.model.names, self.model.pt
-        self.imgsz = check_img_size(imgsz, s=self.stride)  # check image size
+        self.model = attempt_load(weights, map_location=self.device)  # load FP32 model
+        if half:
+            self.model.half()  # to FP16
+        
+        # self.stride, self.names, self.pt = self.model.stride, self.model.names, self.model.pt
+        self.imgsz = check_img_size(imgsz[0], s=self.model.stride.max().item())  # check image size
+        
+        # Get names and colors
+        names = self.model.module.names if hasattr(self.model, 'module') else self.model.names
+        colors = [[random.randint(0, 255) for _ in range(3)] for _ in range(len(names))]
+        
+        img = torch.zeros((1, 3, imgsz[0], imgsz[1]), device=self.device)  # init img
+        _ = self.model(img.half() if half else img) if self.device.type != 'cpu' else None  # run once
+    
         self.conf_thres, self.iou_thres, self.max_det = conf_thres, iou_thres, max_det
         self.agnostic_nms = agnostic_nms
         self.classes = classes
 
         self.augment = augment
         self.visualize = visualize
-        self.model.warmup(imgsz=(1 if self.pt else bs, 3, *imgsz))
     
     def detect(
         self,
         im0s
     ):
         dt, seen = [0.0, 0.0, 0.0], 0
-        im = letterbox(im0s, self.imgsz, stride=self.stride, auto=self.pt)[0]
+        im = letterbox(im0s, self.imgsz, auto=False)[0]
         # Convert
         im = im.transpose((2, 0, 1))[::-1]  # HWC to CHW, BGR to RGB
         im = np.ascontiguousarray(im)
 
-        t1 = time_sync()
         im = torch.from_numpy(im).to(self.device)
-        im = im.half() if self.model.fp16 else im.float()  # uint8 to fp16/32
+        im =  im.float()  # uint8 to fp16/32
         im /= 255  # 0 - 255 to 0.0 - 1.0
         if len(im.shape) == 3:
             im = im[None]  # expand for batch dim
-        t2 = time_sync()
-        dt[0] += t2 - t1
 
         # Inference
-        pred = self.model(im, augment=self.augment, visualize=self.visualize)
-        t3 = time_sync()
-        dt[1] += t3 - t2
+        pred = self.model(im, augment=self.augment)[0]
 
         # NMS
-        pred = non_max_suppression(pred, self.conf_thres, self.iou_thres, self.classes, self.agnostic_nms, max_det=self.max_det)
-        dt[2] += time_sync() - t3
+        pred = non_max_suppression(pred, self.conf_thres, self.iou_thres, classes = self.classes, agnostic=self.agnostic_nms)
 
         s = ''
         # Process predictions
@@ -213,7 +217,6 @@ class Detecter:
                 # Print results
                 for c in det[:, -1].unique():
                     n = (det[:, -1] == c).sum()  # detections per class
-                    s += f"{n} {self.names[int(c)]}{'s' * (n > 1)}, "  # add to string
 
                 # Write results
                 # print(det, det.shape)
@@ -253,7 +256,7 @@ class Predictor(object):
         self.rgb_means = (0.485, 0.456, 0.406)
         self.std = (0.229, 0.224, 0.225)
         self.model = Detecter(
-            weights = '../../trained_detector/yolov5/weights/exp24weights.pt',
+            weights = '../../trained_detector/ScaledYOLOv4/weights/best_all_yolov4-pp6.pt',
             imgsz = (1280, 1280),
             device = self.device,
             classes = 0,
