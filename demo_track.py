@@ -387,14 +387,20 @@ def imageflow_demo(predictor, vis_folder, current_time, args):
         ret_val, frame = cap.read()
         if ret_val:
             outputs, img_info = predictor.inference(frame, timer)
-            imag = frame.copy()
-            for o in outputs:
-                x1, y1, x2, y2 = int(o[0]), int(o[1]), int(o[2]), int(o[3])
-                imag = cv2.rectangle(imag, (x1, y1), (x2, y2), (255, 0, 0), 3)
-            cv2.imwrite(save_path+'img1.png', imag)
-            input('check image')
+            # imag = frame.copy()
+            # for o in outputs:
+            #     x1, y1, x2, y2 = int(o[0]), int(o[1]), int(o[2]), int(o[3])
+            #     imag = cv2.rectangle(imag, (x1, y1), (x2, y2), (255, 0, 0), 3)
+            # cv2.imwrite(save_path+'img1.png', imag)
+            # input('check image')
             if outputs is not None:
                 online_targets = tracker.update(outputs[:,:5], [img_info['height'], img_info['width']], test_size)
+                # for ot in online_targets:
+                #     print(ot.tlbr)
+                #     o = ot.tlbr
+                #     x1, y1, x2, y2 = int(o[0]), int(o[1]), int(o[2]), int(o[3])
+                #     imag = cv2.rectangle(imag, (x1, y1), (x2, y2), (0, 0, 255), 3)
+                # cv2.imwrite(save_path+'TRACKKK.png', imag)
                 online_tlwhs = []
                 online_ids = []
                 online_scores = []
