@@ -10,33 +10,16 @@ import numpy as np
 from loguru import logger
 
 from yolox.data.data_augment import preproc
-from yolox.exp import get_exp
 from yolox.utils import fuse_model, get_model_info, postprocess
 from yolox.utils.visualize import plot_tracking
 from yolox.tracker.byte_tracker import BYTETracker
 from yolox.tracking_utils.timer import Timer
 
-import sys
-sys.path.append('../../trained_detector/yolov5/')
-from pathlib import Path
-
-FILE = Path(__file__).resolve()
-ROOT = FILE.parents[0]  # YOLOv5 root directory
-if str(ROOT) not in sys.path:
-    sys.path.append(str(ROOT))  # add ROOT to PATH
-ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
-
-from models.common import DetectMultiBackend
-from utils.general import (check_img_size, non_max_suppression, scale_coords)
-
-# import detect_y5 as detect
-from utils.torch_utils import select_device, time_sync
-from utils.augmentations import letterbox
-
+# import YoloV5 Detector
+import detect
 
 
 IMAGE_EXT = [".jpg", ".jpeg", ".webp", ".bmp", ".png"]
-
 
 def make_parser():
     parser = argparse.ArgumentParser("ByteTrack Demo!")
@@ -52,7 +35,7 @@ def make_parser():
     )
     parser.add_argument(
         #"--path", default="./datasets/mot/train/MOT17-05-FRCNN/img1", help="path to images or video"
-        "--outdir", default="./track/", help="path of output dir"
+        "--outdir", default="./track_expirements/", help="path of output dir"
     )
     parser.add_argument("--camid", type=int, default=0, help="webcam demo camera id")
     parser.add_argument(
@@ -67,7 +50,7 @@ def make_parser():
         "--exp_file",
         default=None,
         type=str,
-        help="pls input your expriment description file",
+        help="pls input your expriment description file name",
     )
     parser.add_argument("-c", "--ckpt", default=None, type=str, help="ckpt for eval")
     parser.add_argument(
@@ -225,7 +208,6 @@ class Predictor(object):
     def __init__(
         self,
         model,
-        exp,
         trt_file=None,
         decoder=None,
         device=torch.device("cpu"),
@@ -438,12 +420,15 @@ def imageflow_demo(predictor, vis_folder, current_time, args):
 
 
 def main(exp, args):
+    exp = dict() #To store expirement details
+    
     if not args.experiment_name:
-        # args.experiment_name = exp.exp_name
-        args.experiment_name = 'track'
+        args.experiment_name = 'track_exp'
+    exp['expirement_name'] = args.expirement_name
 
     output_dir = osp.join(args.outdir, args.experiment_name)
     os.makedirs(output_dir, exist_ok=True)
+    exp['path'] = output_dir
 
     if args.save_result:
         vis_folder = osp.join(output_dir, "track_vis")
@@ -455,12 +440,12 @@ def main(exp, args):
 
     logger.info("Args: {}".format(args))
 
-    # if args.conf is not None:
-    #     exp.test_conf = args.conf
-    # if args.nms is not None:
-    #     exp.nmsthre = args.nms
-    # if args.tsize is not None:
-    #     exp.test_size = (args.tsize, args.tsize)
+    if args.conf is not None:
+        exp['test_confidence'] = args.conf
+    if args.nms is not None:
+        exp['nms_threshold'] = args.nms
+    if args.tsize is not None:
+        exp['test_img_size'] = (args.tsize, args.tsize)
 
     # model = exp.get_model().to(args.device)
     # logger.info("Model Summary: {}".format(get_model_info(model, exp.test_size)))
@@ -509,7 +494,6 @@ def main(exp, args):
 
 
 if __name__ == "__main__":
+    assert os.path.split(os.getcwd())[-1] == 'Master-Thesis-2022', "Please run python script from repo's root dir"
     args = make_parser().parse_args()
-    # exp = get_exp(args.exp_file, args.name)
-    exp = None
-    main(exp, args)
+    main(args)
